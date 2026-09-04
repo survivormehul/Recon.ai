@@ -5,6 +5,8 @@ import { DeterministicReconciliationEngine } from "@/lib/reconciliation/determin
 import { Money } from "@/lib/money";
 import { Severity, ExceptionType } from "@prisma/client";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);

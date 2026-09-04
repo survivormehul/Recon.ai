@@ -4,6 +4,8 @@ import { DeterministicReconciliationEngine } from "@/lib/reconciliation/determin
 import { ObjectiveEvaluator } from "@/lib/evaluation/evaluator";
 import { prisma } from "@/lib/prisma";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
