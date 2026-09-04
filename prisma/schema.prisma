@@ -449,10 +449,19 @@ model EvaluationResult {
   correctDecisions          Int
   falsePositives            Int
   falseNegatives            Int
+  adversarialRobustnessRate Float             @default(1.0)
   
   // Financial Coverage
   totalValueReconciledMinorUnits BigInt
   totalUnexplainedVarianceMinorUnits BigInt
+  
+  // Financial Leakage (Paise)
+  detectedLeakageMinorUnits  BigInt            @default(0)
+  preventedLeakageMinorUnits BigInt            @default(0)
+  
+  // Rich Breakdown Data
+  scenarioBreakdown         Json?
+  leakageBreakdown          Json?
   
   // Processing Metrics
   throughputPerSecond       Float

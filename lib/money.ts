@@ -38,6 +38,13 @@ export class Money {
   }
 
   /**
+   * Convenience alias for format() specifically for paise.
+   */
+  static formatPaise(minorUnits: bigint | number, currency: string = "INR"): string {
+    return this.format(minorUnits, currency);
+  }
+
+  /**
    * Safe addition of minor units.
    */
   static add(a: bigint, b: bigint): bigint {

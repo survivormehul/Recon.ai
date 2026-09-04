@@ -170,6 +170,9 @@ export class DeterministicReconciliationEngine {
       const ledger = ledgerByOrder.get(orderId);
       const gw = gwList[0];
       const events = eventsByOrder.get(orderId) || [];
+      const refundEvent = events.find((e) => e.eventType === "REFUND");
+      const chargebackEvent = events.find((e) => e.eventType === "CHARGEBACK");
+      const feeEvent = events.find((e) => e.eventType === "FEE_ADJUSTMENT");
 
       // Case A: Duplicate Payment Capture Check
       if (gwList.length > 1) {
@@ -222,8 +225,54 @@ export class DeterministicReconciliationEngine {
       });
 
       if (exactBankMatch) {
-        // High confidence 1-to-1 exact match!
         matchedBankRecordIds.add(exactBankMatch.id);
+
+        // Check if there is a supporting fee adjustment event explaining ledger-gateway variance
+        if (feeEvent) {
+          decisions.push({
+            orderId,
+            state: "RESOLVED",
+            method: "DETERMINISTIC_RULE_FEE_SURCHARGE",
+            confidence: 0.98,
+            varianceMinorUnits: 0n,
+            explanation: `3-way reconciliation resolved: Gateway & Bank settled at ${Money.format(exactBankMatch.creditAmountMinorUnits)}; ledger variance explained by authenticated fee surcharge of ${Money.format(feeEvent.amountMinorUnits)} (${feeEvent.reasonCode}).`,
+            gatewayRecord: gw,
+            bankRecord: exactBankMatch,
+            ledgerRecord: ledger,
+            evidenceItems: [
+              {
+                evidenceType: "UTR_AND_AMOUNT_MATCH",
+                sourceRecordId: exactBankMatch.id,
+                sourceTable: "BankRecord",
+                description: "Bank settlement matches gateway net amount.",
+                monetaryImpactMinorUnits: exactBankMatch.creditAmountMinorUnits,
+              },
+              {
+                evidenceType: "FEE_ADJUSTMENT_PROOF",
+                sourceRecordId: feeEvent.id,
+                sourceTable: "SupportingEvent",
+                description: `Gateway fee surcharge on order ${orderId}.`,
+                monetaryImpactMinorUnits: feeEvent.amountMinorUnits,
+              },
+            ],
+            exceptions: [
+              {
+                exceptionType: ExceptionType.FEE_DISCREPANCY,
+                severity: Severity.LOW,
+                monetaryImpactMinorUnits: feeEvent.amountMinorUnits,
+                orderId,
+                title: "Gateway Fee Surcharge Applied",
+                description: `Surcharge of ${Money.format(feeEvent.amountMinorUnits)} applied by gateway (${feeEvent.reasonCode}).`,
+                recommendedAction: "Verify international surcharge against agreed rate card.",
+              },
+            ],
+            candidates: [],
+            requiresAiInvestigation: false,
+          });
+          continue;
+        }
+
+        // Clean 1-to-1 exact match without supporting events
         decisions.push({
           orderId,
           state: "MATCHED",
@@ -251,10 +300,6 @@ export class DeterministicReconciliationEngine {
       }
 
       // Case C: Check for Deterministic Supporting Events (Refund, Chargeback, Fee Adjustment)
-      const refundEvent = events.find((e) => e.eventType === "REFUND");
-      const chargebackEvent = events.find((e) => e.eventType === "CHARGEBACK");
-      const feeEvent = events.find((e) => e.eventType === "FEE_ADJUSTMENT");
-
       if (refundEvent) {
         decisions.push({
           orderId,
