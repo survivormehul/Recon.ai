@@ -169,15 +169,15 @@ describe("AI Investigation Layer & Anti-Hallucination Guardrails", () => {
   });
 
   // 3. Gemini Provider Configuration & Model Verification
-  it("should configure Gemini provider with the current supported gemini-2.5-flash model", () => {
+  it("should configure Gemini provider with the current supported gemini-3.6-flash model", () => {
     const provider = new GeminiInvestigationProvider();
-    expect(provider.getModelIdentifier()).toBe("gemini-2.5-flash");
+    expect(provider.getModelIdentifier()).toBe("gemini-3.6-flash");
     expect(provider.name).toBe("gemini");
   });
 
-  it("should support custom model overrides while defaulting to gemini-2.5-flash", () => {
-    const customProvider = new GeminiInvestigationProvider({ model: "gemini-2.5-flash" });
-    expect(customProvider.getModelIdentifier()).toBe("gemini-2.5-flash");
+  it("should support custom model overrides while defaulting to gemini-3.6-flash", () => {
+    const customProvider = new GeminiInvestigationProvider({ model: "gemini-3.8-flash" });
+    expect(customProvider.getModelIdentifier()).toBe("gemini-3.8-flash");
   });
 
   it("should report isAvailable=false when GEMINI_API_KEY is not set or empty", () => {
@@ -303,9 +303,10 @@ describe("AI Investigation Layer & Anti-Hallucination Guardrails", () => {
 
   it("should run batch investigations through AiInvestigator orchestrator", async () => {
     const requests: InvestigationRequest[] = [
-      baseRequest,
+      { ...baseRequest, provider: "offline_fallback" },
       {
         orderId: "ORD-DUP-002",
+        provider: "offline_fallback",
         initialState: DecisionState.DUPLICATE,
         varianceMinorUnits: 100000n,
         gatewayRecord: {

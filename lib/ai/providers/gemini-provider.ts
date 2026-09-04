@@ -12,9 +12,9 @@ export class GeminiInvestigationProvider implements IAiProvider {
 
   constructor(options?: { model?: string; timeoutMs?: number }) {
     this.apiKey = process.env.GEMINI_API_KEY?.trim();
-    // Default to the current stable Gemini model: gemini-2.5-flash
-    this.model = options?.model || process.env.GEMINI_MODEL?.trim() || "gemini-2.5-flash";
-    this.timeoutMs = options?.timeoutMs || 10000;
+    // Default to the current stable Gemini Flash model: gemini-3.6-flash
+    this.model = options?.model || process.env.AI_MODEL?.trim() || process.env.GEMINI_MODEL?.trim() || "gemini-3.6-flash";
+    this.timeoutMs = options?.timeoutMs || 35000;
   }
 
   public isAvailable(): boolean {
@@ -178,7 +178,8 @@ ${JSON.stringify(toolCallsExecuted.map((t) => ({ tool: t.toolName, result: t.res
       }
 
       const json = await response.json();
-      const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
+      const parts = json.candidates?.[0]?.content?.parts;
+      const text = parts?.find((p: any) => typeof p.text === "string")?.text;
 
       if (!text) {
         throw new Error("Gemini returned empty candidate text");
