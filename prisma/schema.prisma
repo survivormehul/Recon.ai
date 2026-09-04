@@ -1,0 +1,464 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum DecisionState {
+  MATCHED
+  RESOLVED
+  REVIEW
+  UNRESOLVED
+  DUPLICATE
+  MISSING
+  CONFLICT
+}
+
+enum Severity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum ExceptionType {
+  MISSING_BANK_CREDIT
+  MISSING_GATEWAY_RECORD
+  MISSING_LEDGER_RECORD
+  DUPLICATE_PAYMENT
+  DUPLICATE_BANK_CREDIT
+  AMOUNT_MISMATCH
+  FEE_DISCREPANCY
+  TAX_DISCREPANCY
+  TIMING_LAG
+  PARTIAL_SETTLEMENT
+  CONFLICTING_EVIDENCE
+  AMBIGUOUS_MATCH
+  UNEXPLAINED_VARIANCE
+}
+
+enum SupportingEventType {
+  REFUND
+  CHARGEBACK
+  FEE_ADJUSTMENT
+  TAX_ADJUSTMENT
+  DISPUTE
+  GATEWAY_ADJUSTMENT
+}
+
+enum RunStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+model SourceDataset {
+  id              String   @id @default(uuid())
+  name            String
+  seed            Int?
+  recordCount     Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  description     String?
+
+  runs            ReconciliationRun[]
+  gatewayRecords  GatewayRecord[]
+  bankRecords     BankRecord[]
+  ledgerRecords   LedgerRecord[]
+  supportingEvents SupportingEvent[]
+  groundTruths    GroundTruthRecord[]
+}
+
+model ReconciliationRun {
+  id                        String             @id @default(uuid())
+  datasetId                 String
+  dataset                   SourceDataset      @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  status                    RunStatus          @default(PENDING)
+  startTime                 DateTime           @default(now())
+  endTime                   DateTime?
+  durationMs                Int?
+  
+  // Performance & Counts
+  totalRecordsProcessed     Int                @default(0)
+  matchedCount              Int                @default(0)
+  resolvedCount             Int                @default(0)
+  reviewCount               Int                @default(0)
+  unresolvedCount           Int                @default(0)
+  duplicateCount            Int                @default(0)
+  missingCount              Int                @default(0)
+  conflictCount             Int                @default(0)
+  exceptionCount            Int                @default(0)
+  
+  // Financial Exposure (Minor Units / Paise)
+  totalValueMinorUnits      BigInt             @default(0)
+  reconciledValueMinorUnits BigInt             @default(0)
+  unresolvedValueMinorUnits BigInt             @default(0)
+  financialLeakageMinorUnits BigInt            @default(0)
+  
+  // Throughput
+  throughputPerSecond       Float              @default(0)
+  
+  // AI Metrics
+  aiInvestigationCount      Int                @default(0)
+  aiDurationMs              Int?
+
+  decisions                 ReconciliationDecision[]
+  exceptions                ExceptionRecord[]
+  investigations            AiInvestigation[]
+  auditEvents               AuditEvent[]
+  evaluation                EvaluationResult?
+
+  createdAt                 DateTime           @default(now())
+  updatedAt                 DateTime           @updatedAt
+
+  @@index([datasetId])
+  @@index([status])
+}
+
+model GatewayRecord {
+  id                    String        @id @default(uuid())
+  datasetId             String
+  dataset               SourceDataset @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  
+  // Identifiers
+  orderId               String
+  transactionId         String
+  arnReference          String?       // Acquirer Reference Number
+  rawReference          String?
+  normalizedReference   String?
+  
+  // Financials in Minor Units (Paise/Cents)
+  grossAmountMinorUnits BigInt
+  feeMinorUnits         BigInt        @default(0)
+  taxMinorUnits         BigInt        @default(0)
+  netAmountMinorUnits   BigInt
+  currency              String        @default("INR")
+  
+  // State and Timestamps
+  paymentStatus         String        // AUTHORIZED, CAPTURED, FAILED
+  paymentMethod         String        // UPI, NETBANKING, CARD
+  transactionTime       DateTime
+  settlementDueDate     DateTime?
+  
+  // Raw JSON Metadata
+  rawPayload            Json?
+  
+  candidates            ReconciliationCandidate[]
+  decisions             ReconciliationDecision[]
+
+  createdAt             DateTime      @default(now())
+
+  @@index([datasetId])
+  @@index([orderId])
+  @@index([transactionId])
+  @@index([normalizedReference])
+}
+
+model BankRecord {
+  id                    String        @id @default(uuid())
+  datasetId             String
+  dataset               SourceDataset @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  
+  // Identifiers
+  utrReference          String        // Unique Transaction Reference
+  accountNumberMasked   String
+  rawDescription        String
+  normalizedDescription String?
+  
+  // Financials in Minor Units
+  creditAmountMinorUnits BigInt
+  currency              String        @default("INR")
+  
+  // Timing
+  valueDate             DateTime
+  bookingDate           DateTime
+  
+  // Batched settlement tracking
+  isBatched             Boolean       @default(false)
+  batchCount            Int           @default(1)
+  
+  rawPayload            Json?
+
+  candidates            ReconciliationCandidate[]
+  decisions             ReconciliationDecision[]
+
+  createdAt             DateTime      @default(now())
+
+  @@index([datasetId])
+  @@index([utrReference])
+}
+
+model LedgerRecord {
+  id                    String        @id @default(uuid())
+  datasetId             String
+  dataset               SourceDataset @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  
+  // Identifiers
+  journalEntryId        String
+  internalReference     String
+  orderId               String
+  
+  // Financials in Minor Units
+  expectedAmountMinorUnits BigInt
+  expectedFeeMinorUnits    BigInt     @default(0)
+  expectedTaxMinorUnits    BigInt     @default(0)
+  expectedNetMinorUnits    BigInt
+  currency              String        @default("INR")
+  
+  // Accounting categorization
+  accountCode           String
+  merchantId            String
+  ledgerDate            DateTime
+  
+  rawPayload            Json?
+
+  candidates            ReconciliationCandidate[]
+  decisions             ReconciliationDecision[]
+
+  createdAt             DateTime      @default(now())
+
+  @@index([datasetId])
+  @@index([orderId])
+  @@index([internalReference])
+}
+
+model SupportingEvent {
+  id                    String              @id @default(uuid())
+  datasetId             String
+  dataset               SourceDataset       @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  
+  eventType             SupportingEventType
+  referenceId           String              // Order ID, Refund ID, Chargeback ID
+  relatedTransactionId  String?
+  
+  amountMinorUnits      BigInt
+  feeImpactMinorUnits   BigInt              @default(0)
+  currency              String              @default("INR")
+  
+  eventDate             DateTime
+  reasonCode            String?
+  notes                 String?
+  rawPayload            Json?
+
+  createdAt             DateTime            @default(now())
+
+  @@index([datasetId])
+  @@index([referenceId])
+  @@index([eventType])
+}
+
+model GroundTruthRecord {
+  id                    String        @id @default(uuid())
+  datasetId             String
+  dataset               SourceDataset @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  
+  orderId               String
+  expectedStatus        DecisionState
+  expectedCategory      String
+  
+  matchedGatewayId      String?
+  matchedBankUtr        String?
+  matchedLedgerId       String?
+  
+  supportingEventIds    String[]
+  unexplainedVarianceMinorUnits BigInt @default(0)
+  expectedExplanation   String?
+
+  createdAt             DateTime      @default(now())
+
+  @@index([datasetId])
+  @@index([orderId])
+}
+
+model ReconciliationCandidate {
+  id                    String        @id @default(uuid())
+  gatewayRecordId       String?
+  gatewayRecord         GatewayRecord? @relation(fields: [gatewayRecordId], references: [id], onDelete: Cascade)
+  
+  bankRecordId          String?
+  bankRecord            BankRecord?    @relation(fields: [bankRecordId], references: [id], onDelete: Cascade)
+  
+  ledgerRecordId        String?
+  ledgerRecord          LedgerRecord?  @relation(fields: [ledgerRecordId], references: [id], onDelete: Cascade)
+  
+  similarityScore       Float
+  amountDeltaMinorUnits BigInt
+  dateDeltaDays         Int
+  signals               Json
+  isTopCandidate        Boolean       @default(false)
+
+  createdAt             DateTime      @default(now())
+
+  @@index([gatewayRecordId])
+  @@index([bankRecordId])
+  @@index([ledgerRecordId])
+}
+
+model ReconciliationDecision {
+  id                    String             @id @default(uuid())
+  runId                 String
+  run                   ReconciliationRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  
+  orderId               String
+  state                 DecisionState
+  
+  gatewayRecordId       String?
+  gatewayRecord         GatewayRecord?     @relation(fields: [gatewayRecordId], references: [id], onDelete: SetNull)
+  
+  bankRecordId          String?
+  bankRecord            BankRecord?        @relation(fields: [bankRecordId], references: [id], onDelete: SetNull)
+  
+  ledgerRecordId        String?
+  ledgerRecord          LedgerRecord?      @relation(fields: [ledgerRecordId], references: [id], onDelete: SetNull)
+  
+  confidence            Float              @default(1.0)
+  varianceMinorUnits    BigInt             @default(0)
+  
+  method                String             // DETERMINISTIC_EXACT, DETERMINISTIC_RULE, AI_INVESTIGATED, ESCALATED_NO_EVIDENCE
+  explanation           String
+  
+  evidenceItems         EvidenceItem[]
+  exceptions            ExceptionRecord[]
+  investigation         AiInvestigation?
+
+  createdAt             DateTime           @default(now())
+
+  @@index([runId])
+  @@index([orderId])
+  @@index([state])
+}
+
+model EvidenceItem {
+  id                    String                 @id @default(uuid())
+  decisionId            String
+  decision              ReconciliationDecision @relation(fields: [decisionId], references: [id], onDelete: Cascade)
+  
+  evidenceType          String                 // UTR_MATCH, AMOUNT_MATCH, DATE_WINDOW, REFUND_PROOF, CHARGEBACK_OFFSET, FEE_BREAKDOWN
+  sourceRecordId        String
+  sourceTable           String                 // GatewayRecord, BankRecord, LedgerRecord, SupportingEvent
+  description           String
+  monetaryImpactMinorUnits BigInt              @default(0)
+  
+  createdAt             DateTime               @default(now())
+
+  @@index([decisionId])
+}
+
+model ExceptionRecord {
+  id                    String                 @id @default(uuid())
+  runId                 String
+  run                   ReconciliationRun      @relation(fields: [runId], references: [id], onDelete: Cascade)
+  
+  decisionId            String?
+  decision              ReconciliationDecision? @relation(fields: [decisionId], references: [id], onDelete: SetNull)
+  
+  exceptionType         ExceptionType
+  severity              Severity
+  monetaryImpactMinorUnits BigInt              @default(0)
+  
+  orderId               String
+  title                 String
+  description           String
+  recommendedAction     String
+  
+  resolved              Boolean                @default(false)
+  resolvedAt            DateTime?
+
+  createdAt             DateTime               @default(now())
+
+  @@index([runId])
+  @@index([exceptionType])
+  @@index([severity])
+  @@index([orderId])
+}
+
+model AiInvestigation {
+  id                    String                 @id @default(uuid())
+  runId                 String
+  run                   ReconciliationRun      @relation(fields: [runId], references: [id], onDelete: Cascade)
+  
+  decisionId            String                 @unique
+  decision              ReconciliationDecision @relation(fields: [decisionId], references: [id], onDelete: Cascade)
+  
+  orderId               String
+  provider              String                 // gemini, openai, offline_fallback
+  model                 String
+  promptTokens          Int?
+  completionTokens      Int?
+  latencyMs             Int
+  
+  hypothesesConsidered  String[]
+  toolCallsExecuted     Json?
+  
+  rawAiOutput           String
+  validatedOutput       Json
+  validationPassed      Boolean                @default(true)
+  validationError       String?
+  
+  recommendation        DecisionState
+  reasoningSummary      String
+
+  createdAt             DateTime               @default(now())
+
+  @@index([runId])
+  @@index([orderId])
+}
+
+model AuditEvent {
+  id                    String             @id @default(uuid())
+  runId                 String?
+  run                   ReconciliationRun? @relation(fields: [runId], references: [id], onDelete: Cascade)
+  
+  entityType            String             // Transaction, Run, Exception, Dataset
+  entityId              String
+  action                String             // GENERATED, NORMALIZED, MATCHED, INVESTIGATED, RESOLVED, ESCALATED
+  actor                 String             // DETERMINISTIC_ENGINE, AI_INVESTIGATOR, USER, EVALUATOR
+  
+  previousState         String?
+  newState              String?
+  
+  details               Json?
+  timestamp             DateTime           @default(now())
+
+  @@index([runId])
+  @@index([entityType, entityId])
+}
+
+model EvaluationResult {
+  id                        String            @id @default(uuid())
+  runId                     String            @unique
+  run                       ReconciliationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  
+  // Independent Ground Truth Metrics (calculated objectively)
+  matchRate                 Float
+  precision                 Float
+  recall                    Float
+  f1Score                   Float
+  resolutionRate            Float
+  falseAutoResolutionRate   Float
+  exceptionAccuracy         Float
+  reviewRate                Float
+  unresolvedRate            Float
+  
+  // Ground Truth Verification
+  totalGroundTruthCases     Int
+  correctDecisions          Int
+  falsePositives            Int
+  falseNegatives            Int
+  
+  // Financial Coverage
+  totalValueReconciledMinorUnits BigInt
+  totalUnexplainedVarianceMinorUnits BigInt
+  
+  // Processing Metrics
+  throughputPerSecond       Float
+  totalProcessingTimeMs     Int
+  deterministicDurationMs   Int
+  aiDurationMs              Int
+
+  createdAt                 DateTime          @default(now())
+}
