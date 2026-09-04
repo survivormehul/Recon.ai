@@ -12,6 +12,7 @@ import { ObjectiveEvaluator, ComprehensiveEvaluationResult } from "../evaluation
 import { Money } from "../money";
 import { prisma } from "../prisma";
 import { DecisionState, Severity, ExceptionType, RunStatus } from "@prisma/client";
+import { AuditService, auditMemoryStore } from "../audit/audit-service";
 
 export interface RunOrchestrationOptions {
   seed?: number;
@@ -156,6 +157,57 @@ export class ReconciliationOrchestrator {
     );
     const deterministicMs = Date.now() - detStart;
 
+    // Log dataset ingestion & deterministic matching audit events
+    await AuditService.log({
+      runId: batchResult.runId,
+      entityType: "Dataset",
+      entityId: dataset.datasetId,
+      action: "DATASET_INGESTED",
+      actor: "RECON_ORCHESTRATOR",
+      details: {
+        recordCount,
+        seed,
+        gatewayCount: dataset.gatewayRecords.length,
+        bankCount: dataset.bankRecords.length,
+        ledgerCount: dataset.ledgerRecords.length,
+        supportingEventsCount: dataset.supportingEvents.length,
+      },
+    });
+
+    await AuditService.log({
+      runId: batchResult.runId,
+      entityType: "Run",
+      entityId: batchResult.runId,
+      action: "DETERMINISTIC_MATCHED",
+      actor: "DETERMINISTIC_ENGINE",
+      details: {
+        matchedCount: batchResult.decisions.filter((d) => d.state === DecisionState.MATCHED).length,
+        reviewCount: batchResult.decisions.filter((d) => d.state === DecisionState.REVIEW).length,
+        requiresAiInvestigationCount: batchResult.decisions.filter((d) => d.requiresAiInvestigation).length,
+        durationMs: deterministicMs,
+      },
+    });
+
+    const initialDiscrepancies = batchResult.decisions
+      .filter((d) => d.state !== DecisionState.MATCHED)
+      .slice(0, 15)
+      .map((d) => ({
+        runId: batchResult.runId,
+        entityType: "Transaction" as const,
+        entityId: d.orderId,
+        action: "DISCREPANCY_DETECTED" as const,
+        actor: "DETERMINISTIC_ENGINE" as const,
+        newState: d.state,
+        details: {
+          varianceMinorUnits: d.varianceMinorUnits.toString(),
+          explanation: d.explanation,
+          exceptionCount: d.exceptions.length,
+        },
+      }));
+    if (initialDiscrepancies.length > 0) {
+      await AuditService.logBatch(initialDiscrepancies);
+    }
+
     // Index supporting events by referenceId for AI context injection
     const eventsByOrder = new Map<string, typeof dataset.supportingEvents>();
     for (const ev of dataset.supportingEvents) {
@@ -204,6 +256,39 @@ export class ReconciliationOrchestrator {
         // Execute batch investigation through bounded AI orchestrator
         const invResults = await AiInvestigator.investigateBatch(invRequests);
         aiInvestigationsCount = invResults.length;
+
+        // Log AI investigation audit trail
+        await AuditService.log({
+          runId: batchResult.runId,
+          entityType: "Run",
+          entityId: batchResult.runId,
+          action: "AI_INVESTIGATION_DISPATCHED",
+          actor: "AI_INVESTIGATOR",
+          details: {
+            investigationsCount: invResults.length,
+            provider: aiProvider,
+            durationMs: Date.now() - aiStart,
+          },
+        });
+
+        const aiAuditEvents = invResults.slice(0, 15).map((aiRes) => ({
+          runId: batchResult.runId,
+          entityType: "AiInvestigation" as const,
+          entityId: aiRes.orderId,
+          action: aiRes.validationPassed ? ("VALIDATION_PASSED" as const) : ("VALIDATION_FAILED" as const),
+          actor: "ANTI_HALLUCINATION_VALIDATOR" as const,
+          newState: aiRes.recommendation,
+          details: {
+            provider: aiRes.provider,
+            model: aiRes.model,
+            confidence: aiRes.confidence,
+            reasoningSummary: aiRes.reasoningSummary,
+            citedEvidenceCount: aiRes.citedEvidence.length,
+          },
+        }));
+        if (aiAuditEvents.length > 0) {
+          await AuditService.logBatch(aiAuditEvents);
+        }
 
         // Apply validated AI resolutions to decisions
         const resultMap = new Map(invResults.map((r) => [r.orderId, r]));
@@ -349,6 +434,27 @@ export class ReconciliationOrchestrator {
     // Save to in-memory history cache
     runHistoryStore.saveRun(orchestratedResult);
 
+    // Log run completed audit event
+    await AuditService.log({
+      runId: batchResult.runId,
+      entityType: "Run",
+      entityId: batchResult.runId,
+      action: "RUN_COMPLETED",
+      actor: "RECON_ORCHESTRATOR",
+      newState: "COMPLETED",
+      details: {
+        recordCount,
+        durationMs,
+        matchedCount,
+        resolvedCount,
+        unresolvedCount,
+        matchRatePercent,
+        f1Score: evaluation.f1Score,
+        financialLeakage: Money.formatPaise(evaluation.detectedLeakageMinorUnits),
+        preventedLeakage: Money.formatPaise(evaluation.preventedLeakageMinorUnits),
+      },
+    });
+
     // -------------------------------------------------------------
     // STAGE 4: Persistence to PostgreSQL via Prisma
     // -------------------------------------------------------------
@@ -489,21 +595,23 @@ export class ReconciliationOrchestrator {
       },
     });
 
-    // 5. Create AuditEvent
-    await prisma.auditEvent.create({
-      data: {
-        runId: runRecord.id,
-        entityType: "ReconciliationRun",
-        entityId: runRecord.id,
-        action: "COMPLETED",
-        actor: "ReconciliationOrchestrator",
-        details: {
-          seed: result.seed,
-          recordCount: result.recordCount,
-          matchRate: result.metrics.matchRatePercent,
-          durationMs: result.durationMs,
-        },
-      },
-    });
+    // 5. Batch persist audit trail events for this run
+    const runAuditEvents = auditMemoryStore.getAll(result.runId);
+    if (runAuditEvents.length > 0) {
+      await prisma.auditEvent.createMany({
+        data: runAuditEvents.map((e) => ({
+          runId: runRecord.id,
+          entityType: e.entityType,
+          entityId: e.entityId,
+          action: e.action,
+          actor: e.actor,
+          previousState: e.previousState,
+          newState: e.newState,
+          details: e.details as any,
+          timestamp: e.timestamp || new Date(),
+        })),
+        skipDuplicates: true,
+      });
+    }
   }
 }
