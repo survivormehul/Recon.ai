@@ -13,7 +13,8 @@
     "db:down": "docker compose down",
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
-    "db:generate": "prisma generate"
+    "db:generate": "prisma generate",
+    "benchmark": "tsx scripts/run-benchmark.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.21.1",
