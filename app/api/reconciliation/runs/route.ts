@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { runHistoryStore } from "@/lib/reconciliation/orchestrator";
+import { runHistoryStore, ReconciliationOrchestrator } from "@/lib/reconciliation/orchestrator";
 import { prisma } from "@/lib/prisma";
+
+export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   try {
@@ -42,8 +44,19 @@ export async function GET(req: NextRequest) {
       // Fallback to in-memory store
     }
 
-    // 2. In-memory store fallback
-    const memRuns = runHistoryStore.listRuns();
+    // 2. In-memory store fallback — if completely empty, execute initial verified run
+    let memRuns = runHistoryStore.listRuns();
+    if (memRuns.length === 0) {
+      await ReconciliationOrchestrator.executeRun({
+        seed: 2026,
+        recordCount: 500,
+        useAi: true,
+        aiProvider: "offline_fallback",
+        persistToDb: true,
+      });
+      memRuns = runHistoryStore.listRuns();
+    }
+
     return NextResponse.json({
       success: true,
       source: "memory",

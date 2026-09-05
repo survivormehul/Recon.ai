@@ -32,26 +32,6 @@ export default function DashboardPage() {
       if (data.success && data.runs && data.runs.length > 0) {
         setRunsList(data.runs);
         setLatestRun(data.runs[0]);
-      } else {
-        // If no runs exist yet in database or store, fetch /api/transactions to populate initial state
-        const txnRes = await fetch("/api/transactions?limit=1");
-        const txnData = await txnRes.json();
-        if (txnData.success && txnData.statusSummary) {
-          const s = txnData.statusSummary;
-          setLatestRun({
-            runId: txnData.runId,
-            recordCount: s.total,
-            matchedCount: s.matched,
-            resolvedCount: s.resolved,
-            reviewCount: s.review,
-            unresolvedCount: s.unresolved,
-            exceptionCount: (s.review || 0) + (s.unresolved || 0) + (s.duplicate || 0) + (s.missing || 0),
-            matchRatePercent: Number(((s.matched / (s.total || 1)) * 100).toFixed(1)),
-            formattedTotal: "₹5,00,000.00",
-            formattedLeakage: "₹1,464.60",
-            startTime: new Date().toISOString(),
-          });
-        }
       }
     } catch (err) {
       console.error("Dashboard data fetch failed:", err);
