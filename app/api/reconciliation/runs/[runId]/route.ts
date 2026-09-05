@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { runHistoryStore } from "@/lib/reconciliation/orchestrator";
 import { prisma } from "@/lib/prisma";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(
   req: NextRequest,
   { params }: { params: { runId: string } }
@@ -151,6 +153,18 @@ export async function GET(
           unresolvedValueMinorUnits: dbRun.unresolvedValueMinorUnits.toString(),
           financialLeakageMinorUnits: dbRun.financialLeakageMinorUnits.toString(),
         },
+        evaluation: dbRun.evaluation ? {
+          precision: dbRun.evaluation.precision,
+          recall: dbRun.evaluation.recall,
+          f1: dbRun.evaluation.f1Score,
+          matchRate: dbRun.evaluation.matchRate,
+          resolutionRate: dbRun.evaluation.resolutionRate,
+          totalValueReconciledMinorUnits: dbRun.evaluation.totalValueReconciledMinorUnits.toString(),
+          totalUnexplainedVarianceMinorUnits: dbRun.evaluation.totalUnexplainedVarianceMinorUnits.toString(),
+          detectedLeakageMinorUnits: dbRun.evaluation.detectedLeakageMinorUnits.toString(),
+          preventedLeakageMinorUnits: dbRun.evaluation.preventedLeakageMinorUnits.toString(),
+          leakageBreakdown: dbRun.evaluation.leakageBreakdown,
+        } : null,
         decisions: dbRun.decisions.map((d) => ({
           orderId: d.orderId,
           state: d.state,
